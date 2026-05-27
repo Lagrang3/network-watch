@@ -25,13 +25,13 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 ## Usage
 
 ```bash
-uv run --script test.py -f tasks.yml
+uv run --script watch.py -f tasks.yml
 ```
 
 Or directly:
 
 ```bash
-python test.py -f tasks.yml
+python watch.py -f tasks.yml
 ```
 
 ## Example YAML
@@ -83,7 +83,7 @@ tasks:
 - Python 3.12+
 - `uv` (recommended) or pip
 
-Dependencies are declared at the top of `test.py` using PEP 723 inline script metadata and will be installed automatically when using `uv run --script`.
+Dependencies are declared at the top of `watch.py` using PEP 723 inline script metadata and will be installed automatically when using `uv run --script`.
 
 ## Adding New Task Types
 
@@ -94,5 +94,5 @@ def run_my_task(task: Task) -> tuple[bool, str]:
     ...
 ```
 
-and registering it in the `TASK_RUNNERS` dictionary inside `test.py`.
+and registering it in the `TASK_RUNNERS` dictionary inside `watch.py`.
 
