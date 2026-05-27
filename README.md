@@ -1,8 +1,8 @@
-# Task Runner
+# Network Watch
 
-A lightweight, dependency-aware task runner for infrastructure and network validation tasks.
+A lightweight, dependency-aware task runner for network and infrastructure validation tasks.
 
-It reads a YAML file defining tasks, executes them in the correct order (respecting dependencies), and provides clear live feedback + a rich summary at the end.
+It reads a YAML file defining tasks, executes them in the correct order (respecting dependencies), and provides clear live feedback plus a rich summary at the end.
 
 ## Features
 
@@ -15,12 +15,12 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 
 ## Supported Task Types
 
-| Type          | Description                              | Required Parameters       |
-|---------------|------------------------------------------|---------------------------|
-| `ping`        | Checks network reachability using `ping` | `target`                  |
-| `http-get`    | Verifies HTTP server response using `curl` | `url`                   |
-| `dns-resolve` | Performs DNS lookup using `host`         | `host`                    |
-| `ssh`         | Checks SSH port + verifies host identity | `target`, `identity`      |
+| Type          | Description                                      | Required Parameters          |
+|---------------|--------------------------------------------------|------------------------------|
+| `ping`        | Checks network reachability using `ping`         | `target`                     |
+| `http-get`    | Verifies HTTP server response using `curl`       | `url`                        |
+| `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                       |
+| `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`         |
 
 ## Usage
 
@@ -28,7 +28,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 uv run --script test.py -f tasks.yml
 ```
 
-Or directly with Python:
+Or directly:
 
 ```bash
 python test.py -f tasks.yml
@@ -69,12 +69,12 @@ tasks:
 ## Execution Behavior
 
 - Tasks are executed in **topological order** (dependencies first).
-- If a task fails, all downstream dependent tasks are **skipped**.
+- If a task fails, all downstream dependent tasks are automatically **skipped**.
 - The final output includes:
   - Live progress during execution
-  - A rich summary table with:
+  - A rich summary table showing:
     - Task name
-    - Status (SUCCESS / FAILED / SKIPPED)
+    - Status (`SUCCESS`, `FAILED`, or `SKIPPED`)
     - Description (if provided)
     - Detail / result message
 
@@ -83,16 +83,16 @@ tasks:
 - Python 3.12+
 - `uv` (recommended) or pip
 
-Dependencies are declared at the top of `test.py` and will be installed automatically when using `uv run --script`.
+Dependencies are declared at the top of `test.py` using PEP 723 inline script metadata and will be installed automatically when using `uv run --script`.
 
 ## Adding New Task Types
 
-New task types can be added by implementing a function with the signature:
+New task types can be added by implementing a function with this signature:
 
 ```python
 def run_my_task(task: Task) -> tuple[bool, str]:
     ...
 ```
 
-and registering it in the `TASK_RUNNERS` dictionary.
+and registering it in the `TASK_RUNNERS` dictionary inside `test.py`.
 
