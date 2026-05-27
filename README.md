@@ -22,6 +22,69 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                       |
 | `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`         |
 
+## Task Details
+
+### ping
+
+**Description:** Checks network reachability to a host or IP address.
+
+**Parameters:**
+- `target` (required): IP address or hostname to ping
+
+**Notes:**
+- Uses the command `ping -c 4 -W 2 <target>`.
+- Succeeds if the host responds to at least one of the four packets.
+- `target` can be either an IP address or a hostname.
+
+### http-get
+
+**Description:** Verifies that an HTTP/HTTPS server is responding correctly.
+
+**Parameters:**
+- `url` (required): Full URL to check (must include `http://` or `https://`)
+
+**Notes:**
+- Performs a lightweight HEAD request using `curl`.
+- Considered successful if the server returns a 2xx or 3xx status code.
+- Timeouts after 10 seconds.
+
+### dns-resolve
+
+**Description:** Performs a DNS lookup for a hostname (or reverse lookup for an IP).
+
+**Parameters:**
+- `host` (required): Domain name or IP address to resolve
+
+**Notes:**
+- Uses the standard `host` command-line tool.
+- Succeeds if DNS resolution returns at least one result.
+- Works for both forward lookups (domain → IP) and reverse lookups (IP → domain).
+
+### ssh
+
+**Description:** Checks that an SSH server is reachable on the specified port and that its public host key matches the provided `identity`.
+
+**Parameters:**
+- `target` (required): Hostname or IP address of the SSH server
+- `identity` (required): The expected SSH host public key (e.g. `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...`)
+- `port` (optional): SSH port (defaults to 22)
+
+**How to obtain the identity from the command line:**
+
+```bash
+# Recommended: Get the ed25519 host key (most common modern type)
+ssh-keyscan -t ed25519 -H <hostname-or-ip>
+
+# Clean output — only the key part (recommended for your config)
+ssh-keyscan -t ed25519 -H <hostname-or-ip> 2>/dev/null | awk '{print $2, $3}'
+```
+
+**With a custom port:**
+
+```bash
+ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
+```
+
 ## Usage
 
 ```bash
