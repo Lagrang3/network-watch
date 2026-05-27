@@ -152,15 +152,15 @@ def run_dns_resolve(task: Task) -> tuple[bool, str]:
 
 
 def run_ssh(task: Task) -> tuple[bool, str]:
-    """Check SSH port reachability and verify the host key matches the provided 'key'."""
+    """Check SSH port reachability and verify the host key matches the provided 'identity'."""
     target = task.params.get("target")
-    expected_key = task.params.get("key")
+    expected_identity = task.params.get("identity")
     port = task.params.get("port", 22)
 
     if not target:
         return False, "Missing required parameter 'target'"
-    if not expected_key:
-        return False, "Missing required parameter 'key'"
+    if not expected_identity:
+        return False, "Missing required parameter 'identity'"
 
     try:
         port = int(port)
@@ -186,15 +186,15 @@ def run_ssh(task: Task) -> tuple[bool, str]:
         msg = error_output or "No SSH host keys returned (port may be closed or filtered)"
         return False, f"Failed to retrieve SSH host key from {target}:{port}: {msg}"
 
-    normalized_expected = expected_key.strip()
+    normalized_expected = expected_identity.strip()
 
     if normalized_expected in output:
         for line in output.splitlines():
             if normalized_expected in line.strip():
                 return True, f"SSH host key verified: {line.strip()}"
-        return True, "SSH host key matches the provided key"
+        return True, "SSH host key matches the provided identity"
 
-    return False, f"SSH host key mismatch on {target}:{port}. Expected key not found in scan results."
+    return False, f"SSH host key mismatch on {target}:{port}. Expected identity not found in scan results."
 
 
 def run_unknown(task: Task) -> tuple[bool, str]:
