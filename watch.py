@@ -67,6 +67,40 @@ class Task:
 
 
 # ------------------------------------------------------------------
+# Helper for JSON-RPC style handshakes (used by electrum and stratum)
+# ------------------------------------------------------------------
+
+def _wait_for_jsonrpc_response(
+    sock: socket.socket,
+    request_id: int,
+    host: str,
+    port: int,
+    timeout: float = 10.0,
+) -> dict:
+    """
+    Read newline-delimited JSON-RPC lines until we receive a response
+    whose 'id' matches the one we sent.
+
+    Any non-empty line that is not valid JSON will cause the handshake to fail
+    (the exception will propagate to the caller).
+    """
+    sock.settimeout(timeout)
+    file = sock.makefile("r", encoding="utf-8", newline="\n")
+
+    for line in file:
+        line = line.strip()
+        if not line:
+            continue
+        # Do NOT catch JSONDecodeError here.
+        # If the line is not valid JSON, we want the handshake to fail.
+        data = json.loads(line)
+        if isinstance(data, dict) and data.get("id") == request_id:
+            return data
+
+    raise RuntimeError(f"No JSON-RPC response with id={request_id} received from {host}:{port}")
+
+
+# ------------------------------------------------------------------
 # Task Runners
 # ------------------------------------------------------------------
 
@@ -205,6 +239,7 @@ def run_electrum(task: Task) -> tuple[bool, str]:
     host = task.params.get("host")
     port = task.params.get("port")
     use_tls = bool(task.params.get("TLS", False))
+    request_id = 1
 
     if not host:
         return False, "Missing required parameter 'host'"
@@ -232,32 +267,23 @@ def run_electrum(task: Task) -> tuple[bool, str]:
 
             # Electrum JSON-RPC handshake
             request = {
-                "id": 0,
+                "id": request_id,
                 "method": "server.version",
                 "params": ["network-watch", "1.4"]
             }
             message = json.dumps(request) + "\n"
             ssock.sendall(message.encode("utf-8"))
 
-            # Read response (Electrum sends newline-terminated JSON)
-            response = b""
-            while b"\n" not in response:
-                chunk = ssock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
+            data = _wait_for_jsonrpc_response(ssock, request_id, host, port)
 
-            data = json.loads(response.decode("utf-8").strip())
+            error = data.get("error")
+            if error is not None:
+                return False, f"Electrum server error: {error}"
 
-            if "result" in data:
-                result = data["result"]
-                version = result[0] if isinstance(result, list) and result else str(result)
-                tls_note = " (TLS)" if use_tls else ""
-                return True, f"Electrum server at {host}:{port}{tls_note} responded: {version}"
-            elif "error" in data:
-                return False, f"Electrum server error: {data['error']}"
-            else:
-                return False, "Unexpected response from Electrum server"
+            result = data.get("result")
+            version = result[0] if isinstance(result, list) and result else str(result)
+            tls_note = " (TLS)" if use_tls else ""
+            return True, f"Electrum server at {host}:{port}{tls_note} responded: {version}"
 
     except socket.timeout:
         return False, f"Connection to {host}:{port} timed out"
@@ -266,7 +292,9 @@ def run_electrum(task: Task) -> tuple[bool, str]:
     except ssl.SSLError as e:
         return False, f"TLS error connecting to {host}:{port}: {e}"
     except json.JSONDecodeError:
-        return False, f"Invalid response from {host}:{port} (not valid JSON)"
+        return False, f"Invalid JSON response received from {host}:{port}"
+    except RuntimeError as e:
+        return False, str(e)
     except Exception as e:
         return False, f"Failed to connect to Electrum server: {e}"
 
@@ -300,31 +328,22 @@ def run_stratum(task: Task) -> tuple[bool, str]:
             message = json.dumps(request) + "\n"
             sock.sendall(message.encode("utf-8"))
 
-            # Read line by line until we find the response matching our request id
-            file = sock.makefile('r', encoding='utf-8', newline='\n')
+            data = _wait_for_jsonrpc_response(sock, request_id, host, port)
 
-            for line in file:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    if isinstance(data, dict) and data.get("id") == request_id:
-                        # This is the response to our request
-                        error = data.get("error")
-                        if error is None:
-                            return True, f"Stratum server at {host}:{port} responded successfully"
-                        else:
-                            return False, f"Stratum server error: {error}"
-                except json.JSONDecodeError:
-                    continue  # skip non-JSON lines (banners, notifications, etc.)
+            error = data.get("error")
+            if error is not None:
+                return False, f"Stratum server error: {error}"
 
-            return False, f"No response with matching id received from {host}:{port}"
+            return True, f"Stratum server at {host}:{port} responded successfully"
 
     except socket.timeout:
         return False, f"Connection to {host}:{port} timed out"
     except ConnectionRefusedError:
         return False, f"Connection refused to {host}:{port}"
+    except json.JSONDecodeError:
+        return False, f"Invalid JSON response received from {host}:{port}"
+    except RuntimeError as e:
+        return False, str(e)
     except Exception as e:
         return False, f"Failed to connect to Stratum server: {e}"
 
