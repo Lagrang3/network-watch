@@ -19,6 +19,9 @@ from rich import box
 import click
 import yaml
 import subprocess
+import socket
+import ssl
+import json
 
 
 class TaskSpec(BaseModel):
@@ -64,7 +67,7 @@ class Task:
 
 
 # ------------------------------------------------------------------
-# Task Runners (only real implementations)
+# Task Runners
 # ------------------------------------------------------------------
 
 def run_ping(task: Task) -> tuple[bool, str]:
@@ -197,6 +200,77 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     return False, f"SSH host key mismatch on {target}:{port}. Expected identity not found in scan results."
 
 
+def run_electrum(task: Task) -> tuple[bool, str]:
+    """Connect to an Electrum server (with optional TLS) and perform a protocol handshake."""
+    host = task.params.get("host")
+    port = task.params.get("port")
+    use_tls = bool(task.params.get("TLS", False))
+
+    if not host:
+        return False, "Missing required parameter 'host'"
+    if not port:
+        return False, "Missing required parameter 'port'"
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return False, f"Invalid port value: {port}"
+
+    try:
+        with socket.create_connection((host, port), timeout=10) as sock:
+            sock.settimeout(10)
+
+            if use_tls:
+                # Use TLS when explicitly requested
+                context = ssl.create_default_context()
+                # Many Electrum servers use self-signed certificates
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                ssock = context.wrap_socket(sock, server_hostname=host)
+            else:
+                ssock = sock
+
+            # Electrum JSON-RPC handshake
+            request = {
+                "id": 0,
+                "method": "server.version",
+                "params": ["network-watch", "1.4"]
+            }
+            message = json.dumps(request) + "\n"
+            ssock.sendall(message.encode("utf-8"))
+
+            # Read response (Electrum sends newline-terminated JSON)
+            response = b""
+            while b"\n" not in response:
+                chunk = ssock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+
+            data = json.loads(response.decode("utf-8").strip())
+
+            if "result" in data:
+                result = data["result"]
+                version = result[0] if isinstance(result, list) and result else str(result)
+                tls_note = " (TLS)" if use_tls else ""
+                return True, f"Electrum server at {host}:{port}{tls_note} responded: {version}"
+            elif "error" in data:
+                return False, f"Electrum server error: {data['error']}"
+            else:
+                return False, "Unexpected response from Electrum server"
+
+    except socket.timeout:
+        return False, f"Connection to {host}:{port} timed out"
+    except ConnectionRefusedError:
+        return False, f"Connection refused to {host}:{port}"
+    except ssl.SSLError as e:
+        return False, f"TLS error connecting to {host}:{port}: {e}"
+    except json.JSONDecodeError:
+        return False, f"Invalid response from {host}:{port} (not valid JSON)"
+    except Exception as e:
+        return False, f"Failed to connect to Electrum server: {e}"
+
+
 def run_unknown(task: Task) -> tuple[bool, str]:
     """Placeholder for unknown/unsupported task types."""
     return False, f"Unsupported task type: '{task.type}'"
@@ -207,6 +281,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "http-get": run_http_get,
     "dns-resolve": run_dns_resolve,
     "ssh": run_ssh,
+    "electrum": run_electrum,
 }
 
 

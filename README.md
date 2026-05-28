@@ -21,6 +21,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `http-get`    | Verifies HTTP server response using `curl`       | `url`                        |
 | `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                       |
 | `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`         |
+| `electrum`    | Connects to an Electrum server (TLS optional)    | `host`, `port`               |
 
 ## Task Details
 
@@ -85,6 +86,21 @@ ssh-keyscan -t ed25519 -H <hostname-or-ip> 2>/dev/null | awk '{print $2, $3}'
 ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 ```
 
+### electrum
+
+**Description:** Connects to an Electrum server and performs a protocol handshake (TLS is optional).
+
+**Parameters:**
+- `host` (required): Hostname or IP address of the Electrum server
+- `port` (required): Port number
+- `TLS` (optional, default: `false`): If set to `true`, the connection will be made over TLS. If `false` or omitted, a plain text connection is used.
+
+**Notes:**
+- When `TLS: true`, a TLS connection is established (with relaxed certificate verification, as many Electrum servers use self-signed certificates).
+- When `TLS` is missing or `false`, a plain TCP connection is used.
+- Performs a standard `server.version` handshake.
+- Common ports: 50002 (TLS) or 50001 (plain text).
+
 ## Usage
 
 ```bash
@@ -127,6 +143,22 @@ tasks:
     depends_on:
       - lan-ping
     description: "Verify SSH host key on bastion"
+
+  - name: electrum-mainnet
+    type: electrum
+    host: electrum.blockstream.info
+    port: 50002
+    TLS: true
+    depends_on:
+      - lan-ping
+    description: "Check mainnet Electrum server over TLS"
+
+  - name: electrum-testnet-plain
+    type: electrum
+    host: testnet.aranguren.org
+    port: 51001
+    TLS: false
+    description: "Check testnet Electrum server (plain text)"
 ```
 
 ## Execution Behavior
