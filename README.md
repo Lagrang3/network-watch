@@ -15,14 +15,15 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 
 ## Supported Task Types
 
-| Type          | Description                                      | Required Parameters          |
-|---------------|--------------------------------------------------|------------------------------|
-| `ping`        | Checks network reachability using `ping`         | `target`                     |
-| `http-get`    | Verifies HTTP server response using `curl`       | `url`                        |
-| `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                       |
-| `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`         |
-| `electrum`    | Connects to an Electrum server (TLS optional)    | `host`, `port`               |
-| `stratum`     | Performs Stratum (Bitcoin mining) handshake      | `host`, `port`               |
+| Type          | Description                                      | Required Parameters               |
+|---------------|--------------------------------------------------|-----------------------------------|
+| `ping`        | Checks network reachability using `ping`         | `target`                          |
+| `http-get`    | Verifies HTTP server response using `curl`       | `url`                             |
+| `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                            |
+| `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`              |
+| `electrum`    | Connects to an Electrum server (TLS optional)    | `host`, `port`                    |
+| `stratum`     | Performs Stratum (Bitcoin mining) handshake      | `host`, `port`                    |
+| `lightning`   | Connects to a Lightning node and reports node ID | `host`, `port`, `node_id`         |
 
 ## Task Details
 
@@ -115,6 +116,20 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 - Uses the `mining.subscribe` method for the handshake.
 - Common ports: 3333, 4444, etc.
 
+### lightning
+
+**Description:** Connects to a Lightning node using the Noise protocol handshake and reports the remote node's ID on success.
+
+**Parameters:**
+- `host` (required): Hostname or IP address of the Lightning node
+- `port` (required): Port number (usually 9735)
+- `node_id` (required): The 33-byte compressed public key of the Lightning node in hex (66 characters)
+
+**Notes:**
+- Uses `pyln-proto` to perform the authenticated Lightning handshake.
+- On success, the remote node ID is included in the execution summary.
+- Connection failures (refused, timeout, or handshake errors) are reported as failures.
+
 ## Usage
 
 ```bash
@@ -173,7 +188,16 @@ tasks:
     port: 3333
     depends_on:
       - lan-ping
-    description: "Check stratum mining pool (plain text)"
+    description: "Check stratum mining pool"
+
+  - name: lnd-node
+    type: lightning
+    host: 203.0.113.50
+    port: 9735
+    node_id: 03e2a5b4c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5
+    depends_on:
+      - lan-ping
+    description: "Verify Lightning node reachability"
 ```
 
 ## Execution Behavior

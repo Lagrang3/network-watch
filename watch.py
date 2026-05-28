@@ -2,7 +2,7 @@
 #
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["rich", "click", "pyyaml==6.0.3", "pydantic>=2"]
+# dependencies = ["rich", "click", "pyyaml==6.0.3", "pydantic>=2", "pyln-proto==26.04.1"]
 # ///
 
 from __future__ import annotations
@@ -22,6 +22,15 @@ import subprocess
 import socket
 import ssl
 import json
+import os
+
+# Lightning - using the high-level API from pyln-proto v26.04.1
+try:
+    from pyln.proto.wire import connect as lightning_connect
+    from pyln.proto.primitives import PrivateKey
+except ImportError:
+    lightning_connect = None
+    PrivateKey = None
 
 
 class TaskSpec(BaseModel):
@@ -348,6 +357,51 @@ def run_stratum(task: Task) -> tuple[bool, str]:
         return False, f"Failed to connect to Stratum server: {e}"
 
 
+def run_lightning(task: Task) -> tuple[bool, str]:
+    """Connect to a Lightning node using pyln-proto (v26.04.1) high-level API."""
+    if lightning_connect is None or PrivateKey is None:
+        return False, "pyln-proto is not installed (required for 'lightning' tasks)"
+
+    host = task.params.get("host")
+    port = task.params.get("port")
+    node_id_hex = task.params.get("node_id")
+
+    if not host:
+        return False, "Missing required parameter 'host'"
+    if not port:
+        return False, "Missing required parameter 'port'"
+    if not node_id_hex:
+        return False, "Missing required parameter 'node_id' (33-byte compressed public key in hex)"
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return False, f"Invalid port value: {port}"
+
+    try:
+        node_id_bytes = bytes.fromhex(node_id_hex)
+        if len(node_id_bytes) != 33:
+            return False, "'node_id' must be 66 hex characters (33 bytes)"
+    except Exception:
+        return False, "Invalid 'node_id' (must be hex-encoded 33-byte public key)"
+
+    try:
+        # Use the high-level connect() helper from pyln-proto v26.04.1
+        local_privkey = PrivateKey(os.urandom(32))
+        lconn = lightning_connect(local_privkey, node_id_bytes, host, port)
+
+        # Handshake succeeded
+        remote_id = lconn.remote_pubkey.serializeCompressed().hex()
+        return True, f"Connected to Lightning node {remote_id}"
+
+    except socket.timeout:
+        return False, f"Connection to {host}:{port} timed out"
+    except ConnectionRefusedError:
+        return False, f"Connection refused to {host}:{port}"
+    except Exception as e:
+        return False, f"Lightning handshake failed: {e}"
+
+
 def run_unknown(task: Task) -> tuple[bool, str]:
     """Placeholder for unknown/unsupported task types."""
     return False, f"Unsupported task type: '{task.type}'"
@@ -360,6 +414,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "ssh": run_ssh,
     "electrum": run_electrum,
     "stratum": run_stratum,
+    "lightning": run_lightning,
 }
 
 
