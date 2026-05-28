@@ -271,6 +271,64 @@ def run_electrum(task: Task) -> tuple[bool, str]:
         return False, f"Failed to connect to Electrum server: {e}"
 
 
+def run_stratum(task: Task) -> tuple[bool, str]:
+    """Perform a basic Stratum (Bitcoin mining) protocol handshake over plain TCP (no TLS)."""
+    host = task.params.get("host")
+    port = task.params.get("port")
+    request_id = 1
+
+    if not host:
+        return False, "Missing required parameter 'host'"
+    if not port:
+        return False, "Missing required parameter 'port'"
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return False, f"Invalid port value: {port}"
+
+    try:
+        with socket.create_connection((host, port), timeout=10) as sock:
+            sock.settimeout(10)
+
+            # Stratum v1 mining.subscribe handshake
+            request = {
+                "id": request_id,
+                "method": "mining.subscribe",
+                "params": ["network-watch/1.0"]
+            }
+            message = json.dumps(request) + "\n"
+            sock.sendall(message.encode("utf-8"))
+
+            # Read line by line until we find the response matching our request id
+            file = sock.makefile('r', encoding='utf-8', newline='\n')
+
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict) and data.get("id") == request_id:
+                        # This is the response to our request
+                        error = data.get("error")
+                        if error is None:
+                            return True, f"Stratum server at {host}:{port} responded successfully"
+                        else:
+                            return False, f"Stratum server error: {error}"
+                except json.JSONDecodeError:
+                    continue  # skip non-JSON lines (banners, notifications, etc.)
+
+            return False, f"No response with matching id received from {host}:{port}"
+
+    except socket.timeout:
+        return False, f"Connection to {host}:{port} timed out"
+    except ConnectionRefusedError:
+        return False, f"Connection refused to {host}:{port}"
+    except Exception as e:
+        return False, f"Failed to connect to Stratum server: {e}"
+
+
 def run_unknown(task: Task) -> tuple[bool, str]:
     """Placeholder for unknown/unsupported task types."""
     return False, f"Unsupported task type: '{task.type}'"
@@ -282,6 +340,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "dns-resolve": run_dns_resolve,
     "ssh": run_ssh,
     "electrum": run_electrum,
+    "stratum": run_stratum,
 }
 
 

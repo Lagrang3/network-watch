@@ -22,6 +22,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `dns-resolve` | Performs DNS lookup using the `host` command     | `host`                       |
 | `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`         |
 | `electrum`    | Connects to an Electrum server (TLS optional)    | `host`, `port`               |
+| `stratum`     | Performs Stratum (Bitcoin mining) handshake      | `host`, `port`               |
 
 ## Task Details
 
@@ -101,6 +102,19 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 - Performs a standard `server.version` handshake.
 - Common ports: 50002 (TLS) or 50001 (plain text).
 
+### stratum
+
+**Description:** Performs a basic Stratum protocol handshake (used by Bitcoin mining pools) over plain TCP.
+
+**Parameters:**
+- `host` (required): Hostname or IP address of the Stratum server
+- `port` (required): Port number
+
+**Notes:**
+- Always uses plain TCP.
+- Uses the `mining.subscribe` method for the handshake.
+- Common ports: 3333, 4444, etc.
+
 ## Usage
 
 ```bash
@@ -153,12 +167,13 @@ tasks:
       - lan-ping
     description: "Check mainnet Electrum server over TLS"
 
-  - name: electrum-testnet-plain
-    type: electrum
-    host: testnet.aranguren.org
-    port: 51001
-    TLS: false
-    description: "Check testnet Electrum server (plain text)"
+  - name: mining-pool
+    type: stratum
+    host: pool.example.com
+    port: 3333
+    depends_on:
+      - lan-ping
+    description: "Check stratum mining pool (plain text)"
 ```
 
 ## Execution Behavior
