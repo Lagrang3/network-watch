@@ -237,7 +237,15 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     if normalized_expected in output:
         for line in output.splitlines():
             if normalized_expected in line.strip():
-                return True, f"SSH host key verified: {line.strip()}"
+                verified_line = line.strip()
+                # Shorten the public key part (last long token) for summary display
+                parts = verified_line.split()
+                if len(parts) >= 3:
+                    key = parts[-1]
+                    if len(key) > 16:
+                        parts[-1] = key[:6] + "..." + key[-10:]
+                        verified_line = " ".join(parts)
+                return True, f"SSH host key verified: {verified_line}"
         return True, "SSH host key matches the provided identity"
 
     return False, f"SSH host key mismatch on {target}:{port}. Expected identity not found in scan results."
@@ -392,7 +400,8 @@ def run_lightning(task: Task) -> tuple[bool, str]:
 
         # Handshake succeeded
         remote_id = lconn.remote_pubkey.serializeCompressed().hex()
-        return True, f"Connected to Lightning node {remote_id}"
+        short_id = remote_id[:6] + "..." + remote_id[-6:]
+        return True, f"Connected to Lightning node {short_id}"
 
     except socket.timeout:
         return False, f"Connection to {host}:{port} timed out"
