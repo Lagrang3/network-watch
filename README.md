@@ -132,13 +132,17 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 
 ## Usage
 
+The `-f` / `--file` argument is optional. If omitted, the CLI automatically looks for a `Watch.yml` file first in the current working directory, then falls back to `$HOME/Watch.yml`. If neither exists (or cannot be read), the command fails with a clear error.
+
 ```bash
+uv run --script watch.py            # uses Watch.yml from cwd or $HOME
 uv run --script watch.py -f tasks.yml
 ```
 
 Or directly:
 
 ```bash
+python watch.py
 python watch.py -f tasks.yml
 ```
 

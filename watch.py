@@ -540,10 +540,24 @@ def execute_all(tasks: Dict[str, Task], console: Console | None = None) -> None:
 
 
 @click.command()
-@click.option("--file", "-f", "path", required=True,
+@click.option("--file", "-f", "path", required=False,
               type=click.Path(exists=True, dir_okay=False),
-              help="YAML file with tasks")
-def main(path: str):
+              help="YAML file with tasks (optional: defaults to Watch.yml in cwd, then $HOME/Watch.yml)")
+def main(path: str | None):
+    if path is None:
+        candidates = [
+            os.path.join(os.getcwd(), "Watch.yml"),
+            os.path.join(os.path.expanduser("~"), "Watch.yml"),
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                path = candidate
+                break
+        else:
+            raise click.ClickException(
+                "No --file provided and no Watch.yml found in current directory or $HOME"
+            )
+
     try:
         with open(path, "r") as fd:
             spec = yaml.safe_load(fd)
