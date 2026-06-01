@@ -35,6 +35,7 @@ except ImportError:
 
 class TaskSpec(BaseModel):
     """Pydantic model for validating a single task entry from YAML."""
+
     name: str
     type: str
     depends_on: List[str] = Field(default_factory=list)
@@ -59,7 +60,8 @@ class Task:
         self.description: str = spec.description or ""
 
         self.params: Dict[str, Any] = {
-            k: v for k, v in spec.model_dump().items()
+            k: v
+            for k, v in spec.model_dump().items()
             if k not in ("name", "type", "depends_on", "description")
         }
 
@@ -78,6 +80,7 @@ class Task:
 # ------------------------------------------------------------------
 # Helper for JSON-RPC style handshakes (used by electrum and stratum)
 # ------------------------------------------------------------------
+
 
 def _wait_for_jsonrpc_response(
     sock: socket.socket,
@@ -106,12 +109,15 @@ def _wait_for_jsonrpc_response(
         if isinstance(data, dict) and data.get("id") == request_id:
             return data
 
-    raise RuntimeError(f"No JSON-RPC response with id={request_id} received from {host}:{port}")
+    raise RuntimeError(
+        f"No JSON-RPC response with id={request_id} received from {host}:{port}"
+    )
 
 
 # ------------------------------------------------------------------
 # Task Runners
 # ------------------------------------------------------------------
+
 
 def run_ping(task: Task) -> tuple[bool, str]:
     target = task.params.get("target")
@@ -121,8 +127,9 @@ def run_ping(task: Task) -> tuple[bool, str]:
     cmd = ["ping", "-c", "4", "-W", "2", target]
 
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, timeout=15)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
+        )
     except subprocess.TimeoutExpired:
         return False, f"Ping to {target} timed out after 15 seconds"
     except FileNotFoundError:
@@ -135,7 +142,11 @@ def run_ping(task: Task) -> tuple[bool, str]:
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         return True, lines[-1] if lines else "Ping successful"
     else:
-        error_msg = output.splitlines()[-1] if output else f"Ping failed with exit code {result.returncode}"
+        error_msg = (
+            output.splitlines()[-1]
+            if output
+            else f"Ping failed with exit code {result.returncode}"
+        )
         return False, f"Ping to {target} failed: {error_msg}"
 
 
@@ -147,8 +158,9 @@ def run_http_get(task: Task) -> tuple[bool, str]:
     cmd = ["curl", "-sS", "-I", "--max-time", "10", url]
 
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, timeout=15)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
+        )
     except subprocess.TimeoutExpired:
         return False, f"Request to {url} timed out after 15 seconds"
     except FileNotFoundError:
@@ -178,8 +190,9 @@ def run_dns_resolve(task: Task) -> tuple[bool, str]:
     cmd = ["host", host]
 
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, timeout=10)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10
+        )
     except subprocess.TimeoutExpired:
         return False, f"DNS resolution for {host} timed out"
     except FileNotFoundError:
@@ -216,8 +229,9 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     cmd = ["ssh-keyscan", "-p", str(port), "-T", "5", target]
 
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, timeout=15)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
+        )
     except subprocess.TimeoutExpired:
         return False, f"SSH keyscan to {target}:{port} timed out"
     except FileNotFoundError:
@@ -229,7 +243,9 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     error_output = (result.stderr or "").strip()
 
     if not output:
-        msg = error_output or "No SSH host keys returned (port may be closed or filtered)"
+        msg = (
+            error_output or "No SSH host keys returned (port may be closed or filtered)"
+        )
         return False, f"Failed to retrieve SSH host key from {target}:{port}: {msg}"
 
     normalized_expected = expected_identity.strip()
@@ -248,7 +264,10 @@ def run_ssh(task: Task) -> tuple[bool, str]:
                 return True, f"SSH host key verified: {verified_line}"
         return True, "SSH host key matches the provided identity"
 
-    return False, f"SSH host key mismatch on {target}:{port}. Expected identity not found in scan results."
+    return (
+        False,
+        f"SSH host key mismatch on {target}:{port}. Expected identity not found in scan results.",
+    )
 
 
 def run_electrum(task: Task) -> tuple[bool, str]:
@@ -286,7 +305,7 @@ def run_electrum(task: Task) -> tuple[bool, str]:
             request = {
                 "id": request_id,
                 "method": "server.version",
-                "params": ["network-watch", "1.4"]
+                "params": ["network-watch", "1.4"],
             }
             message = json.dumps(request) + "\n"
             ssock.sendall(message.encode("utf-8"))
@@ -300,7 +319,10 @@ def run_electrum(task: Task) -> tuple[bool, str]:
             result = data.get("result")
             version = result[0] if isinstance(result, list) and result else str(result)
             tls_note = " (TLS)" if use_tls else ""
-            return True, f"Electrum server at {host}:{port}{tls_note} responded: {version}"
+            return (
+                True,
+                f"Electrum server at {host}:{port}{tls_note} responded: {version}",
+            )
 
     except socket.timeout:
         return False, f"Connection to {host}:{port} timed out"
@@ -340,7 +362,7 @@ def run_stratum(task: Task) -> tuple[bool, str]:
             request = {
                 "id": request_id,
                 "method": "mining.subscribe",
-                "params": ["network-watch/1.0"]
+                "params": ["network-watch/1.0"],
             }
             message = json.dumps(request) + "\n"
             sock.sendall(message.encode("utf-8"))
@@ -379,7 +401,10 @@ def run_lightning(task: Task) -> tuple[bool, str]:
     if not port:
         return False, "Missing required parameter 'port'"
     if not node_id_hex:
-        return False, "Missing required parameter 'node_id' (33-byte compressed public key in hex)"
+        return (
+            False,
+            "Missing required parameter 'node_id' (33-byte compressed public key in hex)",
+        )
 
     try:
         port = int(port)
@@ -430,6 +455,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
 # ------------------------------------------------------------------
 # Core engine
 # ------------------------------------------------------------------
+
 
 def build_tasks(spec: Dict[str, Any]) -> Dict[str, Task]:
     """Build and validate tasks from a YAML-derived spec using Pydantic."""
@@ -514,8 +540,10 @@ def execute_all(tasks: Dict[str, Task], console: Console | None = None) -> None:
             continue
 
         console.print()
-        console.print(f"[bold cyan]▶ Running:[/bold cyan] [bold]{task.name}[/bold] "
-                      f"(type=[magenta]{task.type}[/magenta])")
+        console.print(
+            f"[bold cyan]▶ Running:[/bold cyan] [bold]{task.name}[/bold] "
+            f"(type=[magenta]{task.type}[/magenta])"
+        )
 
         task.status = Status.RUNNING
         success, message = task.run()
@@ -535,14 +563,21 @@ def execute_all(tasks: Dict[str, Task], console: Console | None = None) -> None:
                 if dep_name not in failed_ancestors:
                     failed_ancestors.add(dep_name)
                     tasks[dep_name].status = Status.SKIPPED
-                    tasks[dep_name].detail = f"Skipped due to failed ancestor '{task.name}'"
+                    tasks[
+                        dep_name
+                    ].detail = f"Skipped due to failed ancestor '{task.name}'"
                     queue.extend(dependents.get(dep_name, []))
 
 
 @click.command()
-@click.option("--file", "-f", "path", required=False,
-              type=click.Path(exists=True, dir_okay=False),
-              help="YAML file with tasks (optional: defaults to Watch.yml in cwd, then $HOME/Watch.yml)")
+@click.option(
+    "--file",
+    "-f",
+    "path",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False),
+    help="YAML file with tasks (optional: defaults to Watch.yml in cwd, then $HOME/Watch.yml)",
+)
 def main(path: str | None):
     if path is None:
         candidates = [
@@ -578,8 +613,12 @@ def main(path: str | None):
         raise click.ClickException(f"failed to execute tasks: {e}")
 
     # Rich Summary
-    summary_table = Table(title="Execution Summary", show_header=True,
-                          header_style="bold magenta", box=box.ROUNDED)
+    summary_table = Table(
+        title="Execution Summary",
+        show_header=True,
+        header_style="bold magenta",
+        box=box.ROUNDED,
+    )
     summary_table.add_column("Task", style="cyan", no_wrap=True)
     summary_table.add_column("Status", justify="center")
     summary_table.add_column("Description", style="dim")
@@ -599,15 +638,19 @@ def main(path: str | None):
         else:
             status_text = Text(task.status.value, style="dim")
 
-        summary_table.add_row(name, status_text, task.description or "", task.detail or "")
+        summary_table.add_row(
+            name, status_text, task.description or "", task.detail or ""
+        )
 
     console.print(summary_table)
     total = len(tasks)
-    console.print(f"\n[bold]Summary:[/bold] "
-                  f"[green]{success_count} succeeded[/green], "
-                  f"[red]{failed_count} failed[/red], "
-                  f"[yellow]{skipped_count} skipped[/yellow] "
-                  f"(Total: {total})")
+    console.print(
+        f"\n[bold]Summary:[/bold] "
+        f"[green]{success_count} succeeded[/green], "
+        f"[red]{failed_count} failed[/red], "
+        f"[yellow]{skipped_count} skipped[/yellow] "
+        f"(Total: {total})"
+    )
 
 
 if __name__ == "__main__":
