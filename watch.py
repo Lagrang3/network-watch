@@ -7,27 +7,28 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
-
-from pydantic import BaseModel, Field, ValidationError, ConfigDict
-from enum import Enum
-
-from rich.console import Console
-from rich.text import Text
-from rich.table import Table
-from rich import box
-import click
-import yaml
-import subprocess
-import socket
-import ssl
 import json
 import os
+import socket
+import ssl
+import subprocess
+from collections import deque
+from collections.abc import Callable
+from enum import StrEnum
+from typing import Any
+
+import click
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from rich import box
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 # Lightning - using the high-level API from pyln-proto v26.04.1
 try:
-    from pyln.proto.wire import connect as lightning_connect
     from pyln.proto.primitives import PrivateKey
+    from pyln.proto.wire import connect as lightning_connect
 except ImportError:
     lightning_connect = None
     PrivateKey = None
@@ -38,13 +39,13 @@ class TaskSpec(BaseModel):
 
     name: str
     type: str
-    depends_on: List[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
     description: str = ""
 
     model_config = ConfigDict(extra="allow")
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     PENDING = "Pending"
     RUNNING = "Running"
     SUCCESS = "Success"
@@ -56,10 +57,10 @@ class Task:
     def __init__(self, spec: TaskSpec):
         self.name: str = spec.name
         self.type: str = spec.type
-        self.depends_on: List[str] = spec.depends_on
+        self.depends_on: list[str] = spec.depends_on
         self.description: str = spec.description or ""
 
-        self.params: Dict[str, Any] = {
+        self.params: dict[str, Any] = {
             k: v
             for k, v in spec.model_dump().items()
             if k not in ("name", "type", "depends_on", "description")
@@ -109,9 +110,7 @@ def _wait_for_jsonrpc_response(
         if isinstance(data, dict) and data.get("id") == request_id:
             return data
 
-    raise RuntimeError(
-        f"No JSON-RPC response with id={request_id} received from {host}:{port}"
-    )
+    raise RuntimeError(f"No JSON-RPC response with id={request_id} received from {host}:{port}")
 
 
 # ------------------------------------------------------------------
@@ -127,9 +126,7 @@ def run_ping(task: Task) -> tuple[bool, str]:
     cmd = ["ping", "-c", "4", "-W", "2", target]
 
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         return False, f"Ping to {target} timed out after 15 seconds"
     except FileNotFoundError:
@@ -143,9 +140,7 @@ def run_ping(task: Task) -> tuple[bool, str]:
         return True, lines[-1] if lines else "Ping successful"
     else:
         error_msg = (
-            output.splitlines()[-1]
-            if output
-            else f"Ping failed with exit code {result.returncode}"
+            output.splitlines()[-1] if output else f"Ping failed with exit code {result.returncode}"
         )
         return False, f"Ping to {target} failed: {error_msg}"
 
@@ -158,9 +153,7 @@ def run_http_get(task: Task) -> tuple[bool, str]:
     cmd = ["curl", "-sS", "-I", "--max-time", "10", url]
 
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         return False, f"Request to {url} timed out after 15 seconds"
     except FileNotFoundError:
@@ -190,9 +183,7 @@ def run_dns_resolve(task: Task) -> tuple[bool, str]:
     cmd = ["host", host]
 
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired:
         return False, f"DNS resolution for {host} timed out"
     except FileNotFoundError:
@@ -229,9 +220,7 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     cmd = ["ssh-keyscan", "-p", str(port), "-T", "5", target]
 
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
         return False, f"SSH keyscan to {target}:{port} timed out"
     except FileNotFoundError:
@@ -243,9 +232,7 @@ def run_ssh(task: Task) -> tuple[bool, str]:
     error_output = (result.stderr or "").strip()
 
     if not output:
-        msg = (
-            error_output or "No SSH host keys returned (port may be closed or filtered)"
-        )
+        msg = error_output or "No SSH host keys returned (port may be closed or filtered)"
         return False, f"Failed to retrieve SSH host key from {target}:{port}: {msg}"
 
     normalized_expected = expected_identity.strip()
@@ -324,7 +311,7 @@ def run_electrum(task: Task) -> tuple[bool, str]:
                 f"Electrum server at {host}:{port}{tls_note} responded: {version}",
             )
 
-    except socket.timeout:
+    except TimeoutError:
         return False, f"Connection to {host}:{port} timed out"
     except ConnectionRefusedError:
         return False, f"Connection refused to {host}:{port}"
@@ -375,7 +362,7 @@ def run_stratum(task: Task) -> tuple[bool, str]:
 
             return True, f"Stratum server at {host}:{port} responded successfully"
 
-    except socket.timeout:
+    except TimeoutError:
         return False, f"Connection to {host}:{port} timed out"
     except ConnectionRefusedError:
         return False, f"Connection refused to {host}:{port}"
@@ -428,7 +415,7 @@ def run_lightning(task: Task) -> tuple[bool, str]:
         short_id = remote_id[:6] + "..." + remote_id[-6:]
         return True, f"Connected to Lightning node {short_id}"
 
-    except socket.timeout:
+    except TimeoutError:
         return False, f"Connection to {host}:{port} timed out"
     except ConnectionRefusedError:
         return False, f"Connection refused to {host}:{port}"
@@ -457,12 +444,12 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
 # ------------------------------------------------------------------
 
 
-def build_tasks(spec: Dict[str, Any]) -> Dict[str, Task]:
+def build_tasks(spec: dict[str, Any]) -> dict[str, Task]:
     """Build and validate tasks from a YAML-derived spec using Pydantic."""
     if not isinstance(spec, dict):
         raise TypeError(f"spec must be a dict (from yaml.safe_load), got {type(spec)}")
 
-    tasks: Dict[str, Task] = {}
+    tasks: dict[str, Task] = {}
     raw_tasks: Any = spec.get("tasks")
     if raw_tasks is None:
         raise TypeError("YAML file must contain a top-level 'tasks' key")
@@ -487,12 +474,10 @@ def build_tasks(spec: Dict[str, Any]) -> Dict[str, Task]:
     return tasks
 
 
-def topo_order(tasks: Dict[str, Task]) -> List[Task]:
+def topo_order(tasks: dict[str, Task]) -> list[Task]:
     """Return tasks in topological order using Kahn's algorithm."""
-    from collections import deque
-
-    graph: Dict[str, List[str]] = {name: [] for name in tasks}
-    indegree: Dict[str, int] = {name: 0 for name in tasks}
+    graph: dict[str, list[str]] = {name: [] for name in tasks}
+    indegree: dict[str, int] = {name: 0 for name in tasks}
 
     for name, task in tasks.items():
         for dep in task.depends_on:
@@ -501,7 +486,7 @@ def topo_order(tasks: Dict[str, Task]) -> List[Task]:
                 indegree[name] += 1
 
     queue = deque([name for name, deg in indegree.items() if deg == 0])
-    order: List[Task] = []
+    order: list[Task] = []
 
     while queue:
         name = queue.popleft()
@@ -517,14 +502,14 @@ def topo_order(tasks: Dict[str, Task]) -> List[Task]:
     return order
 
 
-def execute_all(tasks: Dict[str, Task], console: Console | None = None) -> None:
+def execute_all(tasks: dict[str, Task], console: Console | None = None) -> None:
     """Execute tasks in topological order with live progress indication."""
     if console is None:
         console = Console()
 
     ordered = topo_order(tasks)
 
-    dependents: Dict[str, list[str]] = {name: [] for name in tasks}
+    dependents: dict[str, list[str]] = {name: [] for name in tasks}
     for name, task in tasks.items():
         for dep in task.depends_on:
             if dep in dependents:
@@ -563,9 +548,7 @@ def execute_all(tasks: Dict[str, Task], console: Console | None = None) -> None:
                 if dep_name not in failed_ancestors:
                     failed_ancestors.add(dep_name)
                     tasks[dep_name].status = Status.SKIPPED
-                    tasks[
-                        dep_name
-                    ].detail = f"Skipped due to failed ancestor '{task.name}'"
+                    tasks[dep_name].detail = f"Skipped due to failed ancestor '{task.name}'"
                     queue.extend(dependents.get(dep_name, []))
 
 
@@ -594,7 +577,7 @@ def main(path: str | None):
             )
 
     try:
-        with open(path, "r") as fd:
+        with open(path) as fd:
             spec = yaml.safe_load(fd)
     except Exception as e:
         raise click.ClickException(f"failed to read YAML: {e}")
@@ -638,9 +621,7 @@ def main(path: str | None):
         else:
             status_text = Text(task.status.value, style="dim")
 
-        summary_table.add_row(
-            name, status_text, task.description or "", task.detail or ""
-        )
+        summary_table.add_row(name, status_text, task.description or "", task.detail or "")
 
     console.print(summary_table)
     total = len(tasks)
