@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import socket
@@ -59,6 +60,7 @@ class Task:
         self.type: str = spec.type
         self.depends_on: list[str] = spec.depends_on
         self.description: str = spec.description or ""
+        self.failed_ancestor = None
 
         self.params: dict[str, Any] = {
             k: v
@@ -502,54 +504,93 @@ def topo_order(tasks: dict[str, Task]) -> list[Task]:
     return order
 
 
-def execute_all(tasks: dict[str, Task], console: Console | None = None) -> None:
+def TaskNameRunner(task):
+    """A wrapper around task.run to add the name to the output"""
+    return task.name, *task.run()
+
+
+def async_execute_all(
+    tasks: dict[str, Task], console: Console | None = None, jobs: int = 1
+) -> None:
     """Execute tasks in topological order with live progress indication."""
     if console is None:
         console = Console()
 
-    ordered = topo_order(tasks)
-
+    indegree: dict[str, int] = {name: 0 for name in tasks}
     dependents: dict[str, list[str]] = {name: [] for name in tasks}
     for name, task in tasks.items():
+        # we check that no names are repeated
+        task.depends_on = list(set(task.depends_on))
         for dep in task.depends_on:
+            indegree[name] += 1
             if dep in dependents:
                 dependents[dep].append(name)
+            else:
+                # we check that every dependency corresponds to a valid task
+                raise click.ClickException(f'Depedency "{dep}" is not a task')
 
-    failed_ancestors: set[str] = set()
+    running = set()
+    completed = []
+    queue = deque([name for name, deg in indegree.items() if deg == 0])
 
-    for task in ordered:
-        if any(dep in failed_ancestors for dep in task.depends_on):
-            task.status = Status.SKIPPED
-            task.detail = "Skipped due to failed dependency"
-            console.print(f"[yellow][SKIPPED][/yellow] {task.name}: {task.detail}")
-            continue
+    def propagate_children(name, success):
+        completed.append(name)
+        for child in dependents[name]:
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+            if not success:
+                tasks[child].failed_ancestor = tasks[name].failed_ancestor
 
-        console.print()
-        console.print(
-            f"[bold cyan]▶ Running:[/bold cyan] [bold]{task.name}[/bold] "
-            f"(type=[magenta]{task.type}[/magenta])"
-        )
-
-        task.status = Status.RUNNING
-        success, message = task.run()
-
-        if success:
-            task.status = Status.SUCCESS
-            console.print(f"[green][SUCCESS][/green] {task.name}: {message}")
-        else:
-            task.status = Status.FAILED
-            task.detail = message
-            console.print(f"[red][FAILED][/red]  {task.name}: {message}")
-
-            failed_ancestors.add(task.name)
-            queue = list(dependents.get(task.name, []))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
+        # loop until there are not more elements in queue or executing
+        while True:
+            # elements in queue, execute them
             while queue:
-                dep_name = queue.pop(0)
-                if dep_name not in failed_ancestors:
-                    failed_ancestors.add(dep_name)
-                    tasks[dep_name].status = Status.SKIPPED
-                    tasks[dep_name].detail = f"Skipped due to failed ancestor '{task.name}'"
-                    queue.extend(dependents.get(dep_name, []))
+                name = queue.popleft()
+                task = tasks[name]
+                # display task as running or skipped
+                if task.failed_ancestor:
+                    task.status = Status.SKIPPED
+                    task.detail = f"Skipped due to failed ancestor '{task.failed_ancestor}'"
+                    console.print()
+                    console.print(f"[yellow][SKIPPED][/yellow] {task.name}: {task.detail}")
+                    propagate_children(task.name, False)
+                else:
+                    task.status = Status.RUNNING
+                    console.print()
+                    console.print(
+                        f"[bold cyan]▶ Running:[/bold cyan] [bold]{task.name}[/bold] "
+                        f"(type=[magenta]{task.type}[/magenta])"
+                    )
+                    fut = executor.submit(TaskNameRunner, task)
+                    running.add(fut)
+
+            # if running is empty break
+            if len(running) == 0:
+                break
+
+            # wait for the first future to finish
+            done, running = concurrent.futures.wait(
+                running, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for fut in done:
+                name, success, message = fut.result()
+                task = tasks[name]
+                if success:
+                    task.status = Status.SUCCESS
+                    task.detail = message
+                    console.print(f"[green][SUCCESS][/green] {task.name}: {message}")
+                else:
+                    task.status = Status.FAILED
+                    task.detail = message
+                    task.failed_ancestor = name  # himself
+                    console.print(f"[red][FAILED][/red]  {task.name}: {message}")
+
+                propagate_children(task.name, success)
+
+    if len(completed) != len(tasks):
+        raise click.ClickException("Dependency cycle detected in tasks")
 
 
 @click.command()
@@ -561,7 +602,15 @@ def execute_all(tasks: dict[str, Task], console: Console | None = None) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="YAML file with tasks (optional: defaults to Watch.yml in cwd, then $HOME/Watch.yml)",
 )
-def main(path: str | None):
+@click.option(
+    "--jobs",
+    "-j",
+    "jobs",
+    required=False,
+    type=click.IntRange(1, 10),
+    help="Number of concurrent tasks at any given moment",
+)
+def main(path: str | None, jobs: int):
     if path is None:
         candidates = [
             os.path.join(os.getcwd(), "Watch.yml"),
@@ -591,7 +640,7 @@ def main(path: str | None):
 
     console = Console()
     try:
-        execute_all(tasks, console)
+        async_execute_all(tasks, console, jobs)
     except Exception as e:
         raise click.ClickException(f"failed to execute tasks: {e}")
 
