@@ -25,6 +25,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `stratum`     | Performs Stratum (Bitcoin mining) handshake      | `host`, `port`                    |
 | `bitcoin`     | Performs Bitcoin P2P version handshake           | `host` (port optional, default 8333) |
 | `lightning`   | Connects to a Lightning node and reports node ID | `host`, `port`, `node_id`         |
+| `subsonic`    | Tries a handshake (ping) with a Subsonic media server | `host`, `port`, `user`, `password` |
 
 ## Task Details
 
@@ -147,6 +148,29 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 - On success, the remote node ID is included in the execution summary.
 - Connection failures (refused, timeout, or handshake errors) are reported as failures.
 
+### subsonic
+
+**Description:** Tries a handshake with a Subsonic (or compatible, e.g. Airsonic) server (media streaming) by calling the `ping` REST endpoint.
+
+**Parameters:**
+
+- `host` (required): Hostname or IP address of the Subsonic server
+- `port` (required): Port number
+- `user` (required): Username for authentication
+- `password` (required): Password for authentication
+- `https` (optional, default: `false`): If set to `true`, use `https://` (with relaxed certificate verification for self-signed certs). If `false` or omitted, plain `http://` is used.
+- `legacy_auth` (optional, default: `false`): If set to `true`, use the legacy plain-text password auth (`p=...`) instead of the modern token (`t=...` + `s=...`). Use this for older Subsonic servers, some Airsonic deployments, or when token auth is disabled (e.g. LDAP users).
+
+**Notes:**
+
+- Default (modern) auth: never sends the password in cleartext; computes `t=md5(password + salt)`, `s=salt` (API >=1.13.0 recommended).
+- When `legacy_auth: true`: sends `p=<password>` directly (accepted by pre-1.13 servers and some restricted setups).
+- A random 8-byte hex salt is generated for every modern handshake attempt.
+- The handshake uses `/rest/ping.view` and succeeds only if the server returns `<subsonic-response status="ok" ...>`.
+- On success, the server's REST API version is reported in the detail (plus " (legacy auth)" suffix when using legacy mode).
+- Common ports: 4040 (http) or 4443 (https).
+- If authentication fails, the server error code and message are reported (e.g. code 40 for bad credentials).
+
 ## Usage
 
 The `-f` / `--file` argument is optional. If omitted, the CLI automatically looks for a `Watch.yml` file first in the current working directory, then falls back to `$HOME/Watch.yml`. If neither exists (or cannot be read), the command fails with a clear error.
@@ -227,6 +251,18 @@ tasks:
     depends_on:
       - lan-ping
     description: "Verify Lightning node reachability"
+
+  - name: subsonic-server
+    type: subsonic
+    host: subsonic.example.com
+    port: 4040
+    user: admin
+    password: secret
+    # https: true        # use https (default false)
+    # legacy_auth: true  # use old p=password auth (for Airsonic / legacy / LDAP)
+    depends_on:
+      - lan-ping
+    description: "Verify Subsonic media server reachability + credentials"
 ```
 
 ## Execution Behavior

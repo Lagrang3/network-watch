@@ -11,11 +11,16 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import secrets
 import socket
 import ssl
 import struct
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Callable
 from enum import StrEnum
@@ -588,6 +593,111 @@ def run_lightning(task: Task) -> tuple[bool, str]:
         return False, f"Lightning handshake failed: {e}"
 
 
+def run_subsonic(task: Task) -> tuple[bool, str]:
+    """Perform a Subsonic REST API handshake using /rest/ping.view.
+
+    Supports modern token auth (default) and legacy plain-password auth
+    (via legacy_auth=true) for older servers / Airsonic / LDAP users.
+    """
+    host = task.params.get("host")
+    port = task.params.get("port")
+    user = task.params.get("user")
+    password = task.params.get("password")
+    use_https = bool(task.params.get("https", False))
+    legacy_auth = bool(task.params.get("legacy_auth", False))
+
+    if not host:
+        return False, "Missing required parameter 'host'"
+    if not port:
+        return False, "Missing required parameter 'port'"
+    if not user:
+        return False, "Missing required parameter 'user'"
+    if not password:
+        return False, "Missing required parameter 'password'"
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return False, f"Invalid 'port' value: {port}"
+
+    scheme = "https" if use_https else "http"
+
+    if legacy_auth:
+        # Old-style auth (pre-1.13 or required by some servers e.g. Airsonic, LDAP)
+        params = {
+            "u": user,
+            "p": password,
+            "v": "1.13.0",
+            "c": "network-watch",
+        }
+        auth_note = " (legacy auth)"
+    else:
+        # Modern token auth (recommended since API 1.13.0). Never send cleartext password.
+        salt = secrets.token_hex(8)
+        token = hashlib.md5((password + salt).encode("utf-8")).hexdigest()
+        params = {
+            "u": user,
+            "t": token,
+            "s": salt,
+            "v": "1.16.1",
+            "c": "network-watch",
+        }
+        auth_note = ""
+
+    query = urllib.parse.urlencode(params)
+    url = f"{scheme}://{host}:{port}/rest/ping.view?{query}"
+
+    try:
+        if use_https:
+            # Relaxed TLS verification (many self-hosted Subsonic servers use self-signed certs)
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            https_handler = urllib.request.HTTPSHandler(context=context)
+            opener = urllib.request.build_opener(https_handler)
+            response = opener.open(url, timeout=10)
+        else:
+            response = urllib.request.urlopen(url, timeout=10)
+
+        # Subsonic returns HTTP 200 even for auth failures; status is in the XML body
+        data = response.read().decode("utf-8", errors="replace")
+        root = ET.fromstring(data)
+        status = root.get("status")
+        api_version = root.get("version", "?")
+
+        if status == "ok":
+            return (
+                True,
+                f"Subsonic server at {scheme}://{host}:{port} "
+                f"responded OK (API v{api_version}){auth_note}",
+            )
+        else:
+            # Extract error details if present (namespace http://subsonic.org/restapi)
+            ns = {"sub": "http://subsonic.org/restapi"}
+            error_elem = root.find(".//sub:error", ns)
+            if error_elem is not None:
+                code = error_elem.get("code", "?")
+                msg = error_elem.get("message", "unknown error")
+                return False, f"Subsonic error code {code}: {msg}"
+            return False, f"Subsonic handshake failed with status={status}"
+
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code} error from {scheme}://{host}:{port}: {e.reason}"
+    except urllib.error.URLError as e:
+        reason = str(e.reason) if e.reason else str(e)
+        if "timed out" in reason.lower():
+            return False, f"Connection to {scheme}://{host}:{port} timed out"
+        if "connection refused" in reason.lower():
+            return False, f"Connection refused to {scheme}://{host}:{port}"
+        return False, f"Connection error to {scheme}://{host}:{port}: {reason}"
+    except ET.ParseError as e:
+        return False, f"Invalid XML response from Subsonic at {scheme}://{host}:{port}: {e}"
+    except TimeoutError:
+        return False, f"Connection to {scheme}://{host}:{port} timed out"
+    except Exception as e:
+        return False, f"Subsonic handshake failed: {e}"
+
+
 def run_unknown(task: Task) -> tuple[bool, str]:
     """Placeholder for unknown/unsupported task types."""
     return False, f"Unsupported task type: '{task.type}'"
@@ -602,6 +712,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "stratum": run_stratum,
     "bitcoin": run_bitcoin,
     "lightning": run_lightning,
+    "subsonic": run_subsonic,
 }
 
 
