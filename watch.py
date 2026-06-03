@@ -640,34 +640,6 @@ def build_tasks(spec: dict[str, Any]) -> dict[str, Task]:
     return tasks
 
 
-def topo_order(tasks: dict[str, Task]) -> list[Task]:
-    """Return tasks in topological order using Kahn's algorithm."""
-    graph: dict[str, list[str]] = {name: [] for name in tasks}
-    indegree: dict[str, int] = {name: 0 for name in tasks}
-
-    for name, task in tasks.items():
-        for dep in task.depends_on:
-            if dep in graph:
-                graph[dep].append(name)
-                indegree[name] += 1
-
-    queue = deque([name for name, deg in indegree.items() if deg == 0])
-    order: list[Task] = []
-
-    while queue:
-        name = queue.popleft()
-        order.append(tasks[name])
-        for neighbor in graph[name]:
-            indegree[neighbor] -= 1
-            if indegree[neighbor] == 0:
-                queue.append(neighbor)
-
-    if len(order) != len(tasks):
-        raise click.ClickException("Dependency cycle detected in tasks")
-
-    return order
-
-
 def TaskNameRunner(task):
     """A wrapper around task.run to add the name to the output"""
     return task.name, *task.run()
