@@ -23,6 +23,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `ssh`         | Checks SSH port reachability + host identity     | `target`, `identity`              |
 | `electrum`    | Connects to an Electrum server (TLS optional)    | `host`, `port`                    |
 | `stratum`     | Performs Stratum (Bitcoin mining) handshake      | `host`, `port`                    |
+| `bitcoin`     | Performs Bitcoin P2P version handshake           | `host` (port optional, default 8333) |
 | `lightning`   | Connects to a Lightning node and reports node ID | `host`, `port`, `node_id`         |
 
 ## Task Details
@@ -116,6 +117,22 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 - Uses the `mining.subscribe` method for the handshake.
 - Common ports: 3333, 4444, etc.
 
+### bitcoin
+
+**Description:** Performs a basic Bitcoin peer-to-peer protocol handshake (version message + verack exchange) over plain TCP to verify a Bitcoin node is reachable and speaks the protocol.
+
+**Parameters:**
+- `host` (required): Hostname or IP address of the Bitcoin peer
+- `port` (optional, defaults to 8333): Port number (8333 for mainnet, 18333 for testnet, etc.)
+
+**Notes:**
+- Always uses plain TCP (the base Bitcoin P2P protocol does not use TLS).
+- On success, the detail includes the remote protocol version and user agent (e.g. "v70016 /Satoshi:25.0.0/").
+- Performs a minimal but complete version/verack handshake using mainnet magic bytes.
+- Common ports: 8333 (mainnet).
+- Connection refused, timeout, or failure to receive a valid 'version' response are treated as failures.
+- Useful for checking full node / peer reachability (different from Electrum/Stratum which are higher level).
+
 ### lightning
 
 **Description:** Connects to a Lightning node using the Noise protocol handshake and reports the remote node's ID on success.
@@ -193,6 +210,14 @@ tasks:
     depends_on:
       - lan-ping
     description: "Check stratum mining pool"
+
+  - name: bitcoin-peer
+    type: bitcoin
+    host: 203.0.113.50
+    # port defaults to 8333
+    depends_on:
+      - lan-ping
+    description: "Verify Bitcoin peer reachability via P2P handshake"
 
   - name: lnd-node
     type: lightning

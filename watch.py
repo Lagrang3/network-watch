@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import os
 import socket
 import ssl
+import struct
 import subprocess
+import time
 from collections import deque
 from collections.abc import Callable
 from enum import StrEnum
@@ -113,6 +116,107 @@ def _wait_for_jsonrpc_response(
             return data
 
     raise RuntimeError(f"No JSON-RPC response with id={request_id} received from {host}:{port}")
+
+
+# ------------------------------------------------------------------
+# Bitcoin P2P protocol helpers (for the 'bitcoin' task type)
+# ------------------------------------------------------------------
+
+BITCOIN_MAGIC = b"\xf9\xbe\xb4\xd9"
+BITCOIN_VERSION = 70016
+BITCOIN_USER_AGENT = b"/network-watch:0.1/"
+
+
+def _make_net_addr(services: int, ip: bytes, port: int) -> bytes:
+    """Pack a Bitcoin net_addr (services + 16-byte IP + port BE)."""
+    return struct.pack(">Q16sH", services, ip, port)
+
+
+def _bitcoin_checksum(payload: bytes) -> bytes:
+    """Double-SHA256 checksum, first 4 bytes."""
+    return hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+
+
+def _build_version_message() -> bytes:
+    """Build a minimal Bitcoin 'version' message (mainnet)."""
+    timestamp = int(time.time())
+    services = 0
+    dummy_ip = b"\x00" * 10 + b"\xff\xff" + b"\x00\x00\x00\x00"
+
+    addr_recv = _make_net_addr(services, dummy_ip, 8333)
+    addr_from = _make_net_addr(0, dummy_ip, 0)
+    nonce = 0xDEADBEEFCAFEBABE
+
+    ua = BITCOIN_USER_AGENT
+    ua_var = struct.pack("B", len(ua)) + ua  # var_str, length < 0xfd
+
+    payload = struct.pack("<iQq", BITCOIN_VERSION, services, timestamp)
+    payload += addr_recv + addr_from
+    payload += struct.pack("<Q", nonce)
+    payload += ua_var
+    payload += struct.pack("<iB", 0, 1)  # start_height + relay
+
+    command = b"version" + b"\x00" * (12 - len(b"version"))
+    length = len(payload)
+    checksum = _bitcoin_checksum(payload)
+    header = BITCOIN_MAGIC + command + struct.pack("<I4s", length, checksum)
+    return header + payload
+
+
+def _build_verack() -> bytes:
+    """Build a Bitcoin 'verack' message (empty payload)."""
+    command = b"verack" + b"\x00" * 6
+    checksum = _bitcoin_checksum(b"")
+    header = BITCOIN_MAGIC + command + struct.pack("<I4s", 0, checksum)
+    return header + b""
+
+
+def _read_bitcoin_message(sock: socket.socket, timeout: float = 10.0) -> tuple[str, bytes]:
+    """Read a full Bitcoin P2P message (header + payload). Returns (command, payload)."""
+    sock.settimeout(timeout)
+    header = b""
+    while len(header) < 24:
+        chunk = sock.recv(24 - len(header))
+        if not chunk:
+            raise RuntimeError("connection closed reading header")
+        header += chunk
+
+    magic, command, length, checksum = struct.unpack("<4s12sI4s", header)
+    if magic != BITCOIN_MAGIC:
+        raise RuntimeError(f"bad magic {magic.hex()}")
+    command = command.rstrip(b"\x00").decode("ascii", errors="ignore")
+
+    payload = b""
+    while len(payload) < length:
+        chunk = sock.recv(length - len(payload))
+        if not chunk:
+            raise RuntimeError("connection closed reading payload")
+        payload += chunk
+
+    # Checksum is verified leniently (proceed even if mismatch for robustness)
+    return command, payload
+
+
+def _parse_version_payload(payload: bytes) -> dict[str, Any]:
+    """Best-effort parse of version payload for remote version + user agent."""
+    if len(payload) < 85:
+        return {"version": 0, "user_agent": "?"}
+    try:
+        version, _, _ = struct.unpack("<iQq", payload[0:20])
+        off = 20 + 52  # skip two net_addrs
+        off += 8  # nonce
+        ua_len = payload[off]
+        off += 1
+        user_agent = payload[off : off + ua_len].decode("ascii", errors="ignore")
+        off += ua_len
+        start_height = struct.unpack("<i", payload[off : off + 4])[0]
+        return {
+            "version": version,
+            "user_agent": user_agent or "?",
+            "start_height": start_height,
+        }
+    except Exception:
+        return {"version": 0, "user_agent": "parse-error"}
 
 
 # ------------------------------------------------------------------
@@ -376,6 +480,65 @@ def run_stratum(task: Task) -> tuple[bool, str]:
         return False, f"Failed to connect to Stratum server: {e}"
 
 
+def run_bitcoin(task: Task) -> tuple[bool, str]:
+    """Perform a basic Bitcoin P2P protocol version handshake (mainnet magic)."""
+    host = task.params.get("host")
+    port = task.params.get("port", 8333)
+
+    if not host:
+        return False, "Missing required parameter 'host'"
+
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return False, f"Invalid port value: {port}"
+
+    try:
+        with socket.create_connection((host, port), timeout=10) as sock:
+            sock.settimeout(10)
+
+            # Send our version message to initiate handshake
+            version_msg = _build_version_message()
+            sock.sendall(version_msg)
+
+            # Read responses; we expect at least their 'version' reply.
+            # We send 'verack' on receiving version. Success if we saw a version.
+            got_version = False
+            info = ""
+            for _ in range(5):  # read a bounded number of messages
+                try:
+                    cmd, payload = _read_bitcoin_message(sock, timeout=8)
+                except Exception:
+                    if got_version:
+                        break
+                    raise
+
+                if cmd == "version":
+                    got_version = True
+                    parsed = _parse_version_payload(payload)
+                    ver = parsed.get("version", 0)
+                    ua = parsed.get("user_agent", "?")
+                    info = f"v{ver} {ua}".strip()
+                    # Complete the handshake
+                    sock.sendall(_build_verack())
+                elif cmd == "verack" and got_version:
+                    return True, f"Bitcoin peer at {host}:{port} handshake OK ({info})"
+
+            if got_version:
+                return True, f"Bitcoin peer at {host}:{port} responded with version ({info})"
+
+            return False, f"No valid version response from Bitcoin peer at {host}:{port}"
+
+    except TimeoutError:
+        return False, f"Connection to {host}:{port} timed out"
+    except ConnectionRefusedError:
+        return False, f"Connection refused to {host}:{port}"
+    except OSError as e:
+        return False, f"Connection error to {host}:{port}: {e}"
+    except Exception as e:
+        return False, f"Bitcoin handshake failed: {e}"
+
+
 def run_lightning(task: Task) -> tuple[bool, str]:
     """Connect to a Lightning node using pyln-proto (v26.04.1) high-level API."""
     if lightning_connect is None or PrivateKey is None:
@@ -437,6 +600,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "ssh": run_ssh,
     "electrum": run_electrum,
     "stratum": run_stratum,
+    "bitcoin": run_bitcoin,
     "lightning": run_lightning,
 }
 
