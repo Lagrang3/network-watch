@@ -26,6 +26,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `bitcoin`     | Performs Bitcoin P2P version handshake           | `host` (port optional, default 8333) |
 | `lightning`   | Connects to a Lightning node and reports node ID | `host`, `port`, `node_id`         |
 | `subsonic`    | Tries a handshake (ping) with a Subsonic media server | `host`, `port`, `user`, `password` |
+| `cln-rest`    | Tries to fetch 'getinfo' from a CLN REST API     | `url`, `rune` |
 
 ## Task Details
 
@@ -170,6 +171,14 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 - On success, the server's REST API version is reported in the detail (plus " (legacy auth)" suffix when using legacy mode).
 - Common ports: 4040 (http) or 4443 (https).
 - If authentication fails, the server error code and message are reported (e.g. code 40 for bad credentials).
+
+### cln-rest
+
+**Description:** Connects to the REST API of a CLN Lightning node and reports the node's ID on success.
+
+**Parameters:**
+- `url` (required): Hostname or IP address and port of the Lightning node's REST service
+- `rune` (required): A rune string with permission to fetch 'getinfo'
 
 ## Usage
 

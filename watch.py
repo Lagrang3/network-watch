@@ -224,6 +224,10 @@ def _parse_version_payload(payload: bytes) -> dict[str, Any]:
         return {"version": 0, "user_agent": "parse-error"}
 
 
+def _short_nodeid(nodeid):
+    return nodeid[:6] + "..." + nodeid[-6:]
+
+
 # ------------------------------------------------------------------
 # Task Runners
 # ------------------------------------------------------------------
@@ -582,7 +586,7 @@ def run_lightning(task: Task) -> tuple[bool, str]:
 
         # Handshake succeeded
         remote_id = lconn.remote_pubkey.serializeCompressed().hex()
-        short_id = remote_id[:6] + "..." + remote_id[-6:]
+        short_id = _short_nodeid(remote_id)
         return True, f"Connected to Lightning node {short_id}"
 
     except TimeoutError:
@@ -703,6 +707,53 @@ def run_unknown(task: Task) -> tuple[bool, str]:
     return False, f"Unsupported task type: '{task.type}'"
 
 
+def run_clnrest(task: Task) -> tuple[bool, str]:
+    """CLN REST API, tries to fetch a getinfo"""
+    url = task.params.get("url")
+    rune = task.params.get("rune")
+    if not url:
+        return False, "Missing required parameter 'url'"
+    if not rune:
+        return False, "Missing required parameter 'rune'"
+
+    cmd = [
+        "curl",
+        "-k",
+        "--max-time",
+        "10",
+        "-H",
+        f"Rune: {rune}",
+        "-X",
+        "POST",
+        f"{url}/v1/getinfo",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return False, f"Request to {url} timed out after 15 seconds"
+    except FileNotFoundError:
+        return False, "The 'curl' command was not found on this system"
+    except Exception as e:
+        return False, f"Failed to execute curl: {e}"
+
+    output = (result.stdout or "").strip()
+    error = (result.stderr or "").strip()
+
+    if result.returncode == 0:
+        try:
+            response = json.loads(output)
+            if "code" in response:
+                return False, response["message"]
+            nodeid = _short_nodeid(response["id"])
+            return True, f"Connected to CLN REST {nodeid}"
+        except Exception as e:
+            return False, f"Failed to parse JSON response: {e}"
+    else:
+        msg = error or output or f"curl exited with code {result.returncode}"
+        return False, f"Failed to reach {url}: {msg}"
+
+
 TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "ping": run_ping,
     "http-get": run_http_get,
@@ -713,6 +764,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "bitcoin": run_bitcoin,
     "lightning": run_lightning,
     "subsonic": run_subsonic,
+    "cln-rest": run_clnrest,
 }
 
 
