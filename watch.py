@@ -754,6 +754,53 @@ def run_clnrest(task: Task) -> tuple[bool, str]:
         return False, f"Failed to reach {url}: {msg}"
 
 
+def run_lndrest(task: Task) -> tuple[bool, str]:
+    """LND REST API, tries to fetch a getinfo"""
+    url = task.params.get("url")
+    macaroon = task.params.get("macaroon")
+    if not url:
+        return False, "Missing required parameter 'url'"
+    if not macaroon:
+        return False, "Missing required parameter 'macaroon'"
+
+    cmd = [
+        "curl",
+        "-k",
+        "--max-time",
+        "10",
+        "-X",
+        "GET",
+        f"{url}/v1/getinfo",
+        "-H",
+        f"Grpc-Metadata-macaroon: {macaroon}",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return False, f"Request to {url} timed out after 15 seconds"
+    except FileNotFoundError:
+        return False, "The 'curl' command was not found on this system"
+    except Exception as e:
+        return False, f"Failed to execute curl: {e}"
+
+    output = (result.stdout or "").strip()
+    error = (result.stderr or "").strip()
+
+    if result.returncode == 0:
+        try:
+            response = json.loads(output)
+            if "code" in response:
+                return False, "Json reply with error: {}".format(response["message"])
+            nodeid = _short_nodeid(response["identity_pubkey"])
+            return True, f"Connected to LND REST {nodeid}"
+        except Exception as e:
+            return False, f"Failed to parse JSON response: {e}"
+    else:
+        msg = error or output or f"curl exited with code {result.returncode}"
+        return False, f"Failed to reach {url}: {msg}"
+
+
 TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "ping": run_ping,
     "http-get": run_http_get,
@@ -765,6 +812,7 @@ TASK_RUNNERS: dict[str, Callable[[Task], tuple[bool, str]]] = {
     "lightning": run_lightning,
     "subsonic": run_subsonic,
     "cln-rest": run_clnrest,
+    "lnd-rest": run_lndrest,
 }
 
 

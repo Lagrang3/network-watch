@@ -27,6 +27,7 @@ It reads a YAML file defining tasks, executes them in the correct order (respect
 | `lightning`   | Connects to a Lightning node and reports node ID | `host`, `port`, `node_id`         |
 | `subsonic`    | Tries a handshake (ping) with a Subsonic media server | `host`, `port`, `user`, `password` |
 | `cln-rest`    | Tries to fetch 'getinfo' from a CLN REST API     | `url`, `rune` |
+| `lnd-rest`    | Tries to fetch 'getinfo' from an LND REST API    | `url`, `macaroon` |
 
 ## Task Details
 
@@ -179,6 +180,14 @@ ssh-keyscan -p 2222 -t ed25519 -H 192.168.1.50
 **Parameters:**
 - `url` (required): Hostname or IP address and port of the Lightning node's REST service
 - `rune` (required): A rune string with permission to fetch 'getinfo'
+
+### lnd-rest
+
+**Description:** Connects to the REST API of an LND Lightning node and reports the node's ID on success.
+
+**Parameters:**
+- `url` (required): Hostname or IP address and port of the Lightning node's REST service
+- `macaroon` (required): A hex string macaroon with permission to fetch 'getinfo'
 
 ## Usage
 
